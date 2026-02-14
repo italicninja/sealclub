@@ -4,7 +4,7 @@
 
 addon.name      = 'sealclub';
 addon.author    = 'samsonffxi';
-addon.version   = '1.0.0';
+addon.version   = '1.1.0';
 addon.desc      = 'Seal farming.';
 addon.link      = 'https://github.com/';
 addon.commands  = {'/sealclub'};
@@ -36,6 +36,10 @@ local default_settings = T{
 	seal_timer_warn_color = {1.0, 0.0, 0.0, 1.0}, --red
 	bseal_cooldown = 300,
     kseal_cooldown = 900,
+
+	-- Horizon mode settings
+	horizon_mode = T{ false, },
+	horizon_cooldown = 300,
 };
 
 -- Variables
@@ -66,6 +70,11 @@ local sealclub = T{
 	bseal_count = 0,
 	kseal_count = 0,
     seals_clubbed = 0,
+
+	-- Horizon mode variables
+	horizon_mode = false,
+	horizon_timer = 0,
+	last_seal_time = 0,
 
     myname = '',
 };
@@ -117,6 +126,11 @@ function render_general_config(settings)
             sealclub.settings.y[1] = pos[2];
         end
         imgui.ShowHelp('The position of SealClub on screen.');
+
+        if (imgui.Checkbox('Horizon Mode', sealclub.settings.horizon_mode)) then
+            settings.save();
+        end
+        imgui.ShowHelp('Combines bseal and kseal into one 5-minute timer.');
 
     imgui.EndChild();
 end
@@ -207,6 +221,11 @@ end);
 * desc : Event called when the addon is being unloaded.
 --]]
 ashita.events.register('unload', 'unload_cb', function ()
+    -- Reset timers on logout
+    sealclub.last_kseal = 0;
+    sealclub.last_bseal = 0;
+    sealclub.last_seal_time = 0;
+    
     -- Save the current settings..
     settings.save();
 end);
@@ -258,7 +277,16 @@ ashita.events.register('command', 'command_cb', function (e)
 		sealclub.settings.visible[1] = false;
         return;
     end
-	
+
+    -- Handle: /sealclub horizon - Toggles horizon mode.
+    if (#args >= 2 and args[2]:any('horizon')) then
+		sealclub.settings.horizon_mode[1] = not sealclub.settings.horizon_mode[1];
+		local mode_status = sealclub.settings.horizon_mode[1] and 'enabled' or 'disabled';
+		print(chat.header(addon.name):append(chat.message('Horizon mode ' .. mode_status .. '.')));
+		settings.save();
+        return;
+    end
+
 end);
 
 --[[
@@ -270,6 +298,7 @@ ashita.events.register('packet_in', 'packet_in_cb', function (e)
 	if( e.id == 0x00B ) then 
         sealclub.last_kseal = 0;
         sealclub.last_bseal = 0;
+		sealclub.last_seal_time = 0;
     end
 end);
 
@@ -289,10 +318,18 @@ ashita.events.register('text_in', 'text_in_cb', function (e)
 	if (kseal) then
         sealclub.kseal_count = sealclub.kseal_count + 1;
         sealclub.last_kseal = ashita.time.clock()['ms'];
+		-- Update horizon mode timer if enabled
+		if (sealclub.settings.horizon_mode[1]) then
+			sealclub.last_seal_time = ashita.time.clock()['ms'];
+		end
 	end
 	if (bseal) then
         sealclub.bseal_count = sealclub.bseal_count + 1;
         sealclub.last_bseal = ashita.time.clock()['ms'];
+		-- Update horizon mode timer if enabled
+		if (sealclub.settings.horizon_mode[1]) then
+			sealclub.last_seal_time = ashita.time.clock()['ms'];
+		end
 	end
     if (kills) then
         sealclub.seals_clubbed = sealclub.seals_clubbed + 1;
@@ -340,7 +377,15 @@ ashita.events.register('d3d_present', 'present_cb', function ()
         elseif (kseal_diff >= sealclub.settings.kseal_cooldown) then
             sealclub.kseal_timer = 0;
 		end
-		
+
+		-- Calculate horizon mode timer
+		local horizon_diff = ashita.time.clock()['s'] - math.floor(sealclub.last_seal_time / 1000.0);
+		if (horizon_diff < sealclub.settings.horizon_cooldown) then
+			sealclub.horizon_timer = sealclub.settings.horizon_cooldown - horizon_diff;
+		else
+			sealclub.horizon_timer = 0;
+		end
+
 		local btimer_display = sealclub.bseal_timer;
 		if (btimer_display <= 0) then
 			btimer_display = "Beastman Seal Ready"
@@ -355,30 +400,58 @@ ashita.events.register('d3d_present', 'present_cb', function ()
 		imgui.SetWindowFontScale(sealclub.settings.font_scale[1]);
 		imgui.Separator();
 		
-		imgui.Text('BSeal Timer: ');
-		imgui.SameLine();
-		if (btimer_display == 'Beastman Seal Ready') then
-			imgui.TextColored(sealclub.settings.seal_timer_ready_color, tostring(btimer_display));
-		else
-			imgui.Text(tostring(btimer_display));
-		end
-        imgui.Text('Beastman Seal Count: ');
-        imgui.SameLine();
-		imgui.Text(tostring(sealclub.bseal_count));
-		imgui.Separator();
+		-- Display horizon mode or individual timers based on setting
+		if (sealclub.settings.horizon_mode[1]) then
+			-- Horizon Mode Display
+			local htimer_display = sealclub.horizon_timer;
+			if (htimer_display <= 0) then
+				htimer_display = "Seal Ready"
+			end
 
-		imgui.Text('KSeal Timer: ');
-		imgui.SameLine();
-		if (ktimer_display == 'Kindred Seal Ready') then
-			imgui.TextColored(sealclub.settings.seal_timer_ready_color, tostring(ktimer_display));
+			imgui.Text('Horizon Timer: ');
+			imgui.SameLine();
+			if (htimer_display == 'Seal Ready') then
+				imgui.TextColored(sealclub.settings.seal_timer_ready_color, tostring(htimer_display));
+			else
+				imgui.Text(tostring(htimer_display));
+			end
+			imgui.Separator();
+
+			-- Still show counts
+			imgui.Text('Beastman Seal Count: ');
+			imgui.SameLine();
+			imgui.Text(tostring(sealclub.bseal_count));
+			imgui.Text('Kindred Seal Count: ');
+			imgui.SameLine();
+			imgui.Text(tostring(sealclub.kseal_count));
+			imgui.Separator();
 		else
-			imgui.Text(tostring(ktimer_display));
+			-- Normal Mode Display
+			imgui.Text('BSeal Timer: ');
+			imgui.SameLine();
+			if (btimer_display == 'Beastman Seal Ready') then
+				imgui.TextColored(sealclub.settings.seal_timer_ready_color, tostring(btimer_display));
+			else
+				imgui.Text(tostring(btimer_display));
+			end
+			imgui.Text('Beastman Seal Count: ');
+			imgui.SameLine();
+			imgui.Text(tostring(sealclub.bseal_count));
+			imgui.Separator();
+
+			imgui.Text('KSeal Timer: ');
+			imgui.SameLine();
+			if (ktimer_display == 'Kindred Seal Ready') then
+				imgui.TextColored(sealclub.settings.seal_timer_ready_color, tostring(ktimer_display));
+			else
+				imgui.Text(tostring(ktimer_display));
+			end
+			imgui.Text('Kindred Seal Count: ');
+			imgui.SameLine();
+			imgui.Text(tostring(sealclub.kseal_count));
+			imgui.Separator();
 		end
-        imgui.Text('Kindred Seal Count: ');
-        imgui.SameLine();
-		imgui.Text(tostring(sealclub.kseal_count));
-		imgui.Separator();
-		
+
         imgui.Text('Total Time: ');
         imgui.SameLine();
         imgui.Text(tostring(string.format('%.2f', (elapsed_time / 60)) .. ' minutes'));
