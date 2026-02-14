@@ -455,6 +455,17 @@ ashita.events.register('d3d_present', 'present_cb', function ()
         imgui.Text('Total Time: ');
         imgui.SameLine();
         imgui.Text(tostring(string.format('%.2f', (elapsed_time / 60)) .. ' minutes'));
+        
+        -- Calculate and display seals per hour
+        local total_seals = sealclub.bseal_count + sealclub.kseal_count;
+        local seals_per_hour = 0;
+        if (elapsed_time > 0) then
+            seals_per_hour = (total_seals / elapsed_time) * 3600;
+        end
+        imgui.Text('Seals Per Hour: ');
+        imgui.SameLine();
+        imgui.Text(tostring(string.format('%.1f', seals_per_hour)));
+        
         imgui.Text('Seals Clubbed: ');
         imgui.SameLine();
         imgui.Text(tostring(format_int(sealclub.seals_clubbed)) .. ' baby seals (x.x)');
